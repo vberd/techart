@@ -1,0 +1,33 @@
+//Create textField and button
+//Using the button you can select a folder in the explorer(fileDialog2)
+//The path to the folder will be passed to the textField
+
+proc updateTextField()
+{
+	string $Fldr_slct[] = `fileDialog2 -fm 3 -ds 0 -cap "Select folder" -okc "Select folder"`;
+	textField -ed -tx $Fldr_slct Path_folder ;
+}
+
+scriptJob -ct "GoButtonEnabled" "updateTextField()";
+
+global proc Window()
+{
+	string $path_name = dirname(`file -q -sn`);
+
+	if (`window -ex Window`)
+	{
+	    deleteUI Window;
+	}
+	    
+	window -t "Example select folder" -s false -rtf true Window;
+	
+	columnLayout;
+	rowLayout -nc 3;
+	text -l "Folder";
+	textField -w 225 -tx $path_name Path_folder;
+	button -l " ... " -w 20 -c updateTextField;
+
+	showWindow Window;	
+}
+
+Window();
