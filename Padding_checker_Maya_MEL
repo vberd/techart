@@ -1,0 +1,358 @@
+/*
+Code by Vlad Bedynskykh aka vberd
+email: v.berdinskich@gmail.com
+Padding checker
+1. Select object
+2. Chose UV size and Padding and press Check padding.
+Incorrect padding will be shown as pinned UV points
+Overlapped edges and UV points will be shown as pinned UV points
+Vertexes with same coordinates will be shown as pinned UV points
+Many small UV shells will cause a long processing
+Don't use overlapping
+ESC interrupt script
+*/ 
+
+if (`window -exists PddngWndw`)
+{
+    deleteUI PddngWndw;
+}
+int $padding_pix = 8;
+int $side_u = 1;
+int $side_v = 1;
+//##Select edges border
+proc Edges_border(){
+    SelectEdgeMask;
+    SelectAll;
+    string $sel[];
+    $sel = `polyListComponentConversion -toEdge`;
+    $sel = `ls -sl -flatten`;
+    string $borderEdges[] = {};
+    for ($edge in $sel)
+    {
+        int $count;
+        string $list[];
+        // test on uvs > 2
+        $list = `polyListComponentConversion -toUV $edge`;
+        $list = `ls -flatten $list`;
+        $count = `size $list`;
+        if ($count>2)
+        {
+            $borderEdges = stringArrayCatenate($borderEdges,{$edge});
+        }
+        // test on faces == 1
+        $list = `polyListComponentConversion -toFace $edge`;
+        $list = `ls -flatten $list`;
+        $count = `size $list`;
+        if ($count==1)
+        {
+            $borderEdges = stringArrayCatenate($borderEdges,{$edge});
+        }
+    }
+        //cleanup
+        $borderEdges = `stringArrayRemoveDuplicates $borderEdges`;
+        select $borderEdges;
+}
+//##Fin select edges border
+//## Create window
+$padding_window = `window -title "Padding checker" -iconName "Padding" -widthHeight 180 90 -sizeable false -resizeToFitChildren true PddngWndw`;
+rowColumnLayout -numberOfColumns 2 -rowSpacing 50 15;
+text -l "UV size (pixels)";
+optionMenu -w 100 Side_u;
+    menuItem -label "64";
+    menuItem -label "128";
+    menuItem -label "256";
+    menuItem -label "512";
+    menuItem -label "1024";
+    menuItem -label "2048";
+    menuItem -label "4096";
+    menuItem -label "8192";
+text -l "Padding (pixels)";
+    intField -minValue 1  -value 8 MyPadding;
+button -label "Check padding" -command "Padding_checker()";
+button -label "Close window" -command ("deleteUI -window " + $padding_window);
+showWindow $padding_window;
+//##Fin create window
+global proc Padding_checker()
+{
+    changeSelectMode -object;
+    int $padding_pix = `intField -q -v MyPadding`;
+    int $side_u = `optionMenu -q -select Side_u`;
+    string $selected_obj[] = {};
+    $selected_obj = `ls -sl -fl`;
+    BakeNonDefHistory;
+    if (size($selected_obj) != 0)
+    {
+        switch ($side_u)
+        {
+            case 1:
+                $side_u = 64;
+            break;
+            case 2:
+                $side_u = 128;
+            break;
+            case 3:
+                $side_u = 256;
+            break;
+            case 4:
+                $side_u = 512;
+            break;
+            case 5:
+                $side_u = 1024;
+            break;
+            case 6:
+                $side_u = 2048;
+            break;
+            case 7:
+                $side_u = 4096;
+            break;
+            case 8:
+                $side_u = 8192;
+            break;
+        }
+        float $padding = (float($padding_pix) / $side_u);
+        //## Get Harden edges
+        select $selected_obj;
+        polySelectConstraint -m 3 -t 0x8000 -sm 1;
+        polySelectConstraint -m 0;
+        string $harden_edges_all[] = `ls -sl -fl`;
+        //## Fin Get Harden edges
+        //## Fix UV
+        select $selected_obj;
+        SelectFacetMask;
+        SelectAll;
+        polyEditUV -u 1 -v 0;
+        Undo;
+        select $selected_obj;
+        //## Fin fix UV
+        //## Separate edges in Mesh for UV
+        for ($selected_obj_n in $selected_obj)
+        {
+            select $selected_obj_n;
+            UVEditorUnpinAll;
+            SelectFacetMask;
+            SelectAll;
+            string $all_polys[];
+            $all_polys = `ls -sl -fl`;
+            string $corrent_polys[];
+            
+            for ($polys in $all_polys)
+            {
+                select $polys;
+                polySelectBorderShell 0;
+                DetachComponent; 
+                $all_polys = stringArrayRemove(`ls -sl -fl`, $all_polys);
+            }
+            SelectAll;
+            polyMergeUV -d 0.00001 -ch 1;           
+            Edges_border();
+            DetachComponent;
+            Edges_border();
+            SewUVs;
+            select -cl;
+        }
+        SelectToggleMode;
+        select $selected_obj;
+        //## Fin Separate edges in Mesh for UV
+        //## Create list of edges perimeter
+        Edges_border();
+        string $selected_edges[] = {};
+        $selected_edges = `ls -sl -fl`;
+        //## Fin create list of edges perimeter
+        //## Create list of vertexes perimeter
+        SelectUVMask;
+        SelectAll;
+        polySelectBorderShell 1;
+        string $a[] = {};
+        $a=`ls -sl -fl`;
+        
+        //## Pinning overlapped vertexes and edges
+        select -cl;
+        SelectUVMask;
+        SelectUVOverlappingComponents;
+        PinSelection;
+        $a = stringArrayRemove(`ls -sl -fl`, $a);
+        select -cl;
+        SelectEdgeMask;
+        SelectUVOverlappingComponents;
+        ConvertSelectionToUVs;
+        PinSelection;
+        $a = stringArrayRemove(`ls -sl -fl`, $a);
+        //## Fin Pinning overlapped vertexes and edges
+                
+        //## Fin Create list of vertexes perimeter
+        string $edge_to_vertex[] = {};
+        float $progress_bar = 0;
+        float $one_edge = (100.0 / size($selected_edges));
+        for ($current_edge in $selected_edges)
+        {
+            //## Progress
+            global string $gMainProgressBar;
+            progressBar -edit -beginProgress -isInterruptable true $gMainProgressBar;
+            if(`progressBar -query -isCancelled $gMainProgressBar`)
+            break;
+            print ($progress_bar+"/100% \n");
+            $progress_bar += $one_edge;
+            //## Fin progress
+            select $current_edge;
+            ConvertSelectionToUVs;
+            $edge_to_vertex = `ls -sl -fl`;
+            // First and second vertex from edge
+            float $edge_to_vertex_0[2] = `polyEditUV -query $edge_to_vertex[0]`;
+            float $edge_to_vertex_1[2] = `polyEditUV -query $edge_to_vertex[1]`;
+            float $maxU = `max $edge_to_vertex_0[0] $edge_to_vertex_1[0]`;
+            float $minU = `min $edge_to_vertex_0[0] $edge_to_vertex_1[0]`;
+            float $maxV = `max $edge_to_vertex_0[1] $edge_to_vertex_1[1]`;
+            float $minV = `min $edge_to_vertex_0[1] $edge_to_vertex_1[1]`;
+            $maxU += $padding;
+            $minU -= $padding;
+            $maxV += $padding;
+            $minV -= $padding;
+
+            //## Checking padding at UV perimeter
+            for ($vertex in $edge_to_vertex)
+            {
+                float $uv[2] = `polyEditUV -query $vertex`;
+                $vertex_1 = stringToStringArray($vertex, "");
+                if($uv[0] < ($padding/2))
+                {
+                    select  $vertex;
+                    polyPinUV -value 1;
+                    $a = stringArrayRemove($vertex_1, $a);
+                }
+                else if ($uv[1] < ($padding/2))
+                {
+                    select  $vertex;
+                    polyPinUV -value 1;
+                    $a = stringArrayRemove($vertex_1, $a);
+                }
+                else if ($uv[0] > (1-$padding/2))
+                {
+                    select  $vertex;
+                    polyPinUV -value 1;
+                    $a = stringArrayRemove($vertex_1, $a);
+                }
+                else if ($uv[1] > (1-$padding/2))
+                {
+                    select  $vertex;
+                    polyPinUV -value 1;
+                    $a = stringArrayRemove($vertex_1, $a);
+                }
+            }
+            //## Fin Checking padding at UV perimeter  
+            
+            //## Create new edges array without current shell/edges            
+            select $current_edge;
+            SelectUVShell;
+            ConvertSelectionToUVs;
+            string $b[] = {};
+            $b = stringArrayRemove(`ls -sl -fl`, $a);
+            //## Fin Create new edges array without current shell/edges
+            for ($vrtx_x in $b)
+            {
+                float $vrtx1[2] = `polyEditUV -query $vrtx_x`;
+                if ($vrtx1[0] < $maxU)
+                {
+                    if ($vrtx1[0] > $minU)
+                    {
+                        if ($vrtx1[1] < $maxV)
+                        {
+                            if ($vrtx1[1] > $minV)
+                            {
+                                // Vector from (0,0) to (U position, V position)
+                                float $point_AU = ($edge_to_vertex_0[0]-$edge_to_vertex_1[0]);
+                                float $point_AV = ($edge_to_vertex_0[1]-$edge_to_vertex_1[1]);
+                                // Vector length (current edge)
+                                float $distance_AB = `mag<<$point_AU, $point_AV, 0>>`;
+                                // Pin vertexes with small padding to B
+                                float $point_BU = ($vrtx1[0]-$edge_to_vertex_1[0]);
+                                float $point_BV = ($vrtx1[1]-$edge_to_vertex_1[1]);
+                                float $distance_BC = `mag<<$point_BU, $point_BV, 0>>`;
+                                if ($distance_BC < $padding)
+                                {
+                                    select  $vrtx_x;
+                                    polyPinUV -value 1;
+                                }
+                                else
+                                {
+                                    // Pin vertexes with small padding to A
+                                    float $point_CU = ($edge_to_vertex_0[0]-$vrtx1[0]);
+                                    float $point_CV = ($edge_to_vertex_0[1]-$vrtx1[1]);
+                                    float $distance_AC = `mag<<$point_CU, $point_CV, 0>>`;
+                                    if ($distance_AC < $padding)
+                                    {
+                                        select  $vrtx_x;
+                                        polyPinUV -value 1;
+                                    }
+                                    else
+                                    {
+                                        float $distance_AD = sqrt($distance_AC*$distance_AC-$padding*$padding);
+                                        float $distance_DB = sqrt($distance_BC *$distance_BC-$padding*$padding);
+                                        float $distance_ADB = $distance_AD + $distance_DB;
+                                        // Pin vertexes with small padding
+                                        if ($distance_AB > $distance_ADB)
+                                        {
+                                            select  $vrtx_x;
+                                            polyPinUV -value 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        global string $gMainProgressBar;
+        progressBar -edit -endProgress $gMainProgressBar;
+
+        //## Marge vertexes
+        for ($selected_obj_n in $selected_obj)
+        {
+            select $selected_obj_n;
+            SelectVertexMask;
+            SelectAll;
+            polyMergeVertex  -d 0.000001 -am 1 -ch 1;
+            polyMergeUV -d 0.000001 -ch 1;
+            select -cl;
+        }
+        SelectToggleMode;
+        //## Fin Marge vertexes
+        
+        //## Set Harden/Soften edges
+        for ($selected_obj_n in $selected_obj)
+        {
+            select $selected_obj_n;
+            BakeNonDefHistory;
+            polyNormalPerVertex -ufn true;
+            SelectEdgeMask;
+            SelectAll;
+            string $soften[] = {};
+            $soften = stringArrayRemove($harden_edges_all, `ls -sl -fl`);
+            SelectEdgeMask;
+            SelectAll;
+            string $harden[] = `ls -sl -flatten`;            
+            $harden = stringArrayRemove($soften, $harden);
+            if(size($soften)>0)
+            {
+                select $soften;
+                polySoftEdge -a 180;
+            }
+            if(size($harden)>0)
+            {
+                select $harden;
+                polySoftEdge -a 0;
+            }
+        }
+        //## Fin Set Harden/Soften edges
+        
+        select -cl;
+        SelectToggleMode;
+        select $selected_obj;
+        confirmDialog -title "Finish" -message  "All the problem vertexes you can found pinned in UVeditor" -ma "center" -button "Ok" ;
+    }
+    else
+    {
+        print "Select at least one object";
+        confirmDialog -title "Warning" -message  "Select at least one object" -ma "center" -button "Ok" ;
+    }
+}
